@@ -1,0 +1,474 @@
+---
+title: "Credit card. TÉCNICAS DE CLASIFICACIÓN"
+author: "Jose López, Antonio Romero, Francisco del Val"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi = 500, include = FALSE, warning = FALSE)
+```
+
+## *ABSTRACT*
+
+El objetivo del siguiente trabjao es buscar el mejor modelo que sea capaz de clasificar a los individuos que buscan una tarjeta de crédito. Utilizando la base de datos *CreditCard* del paquete *AER*. Para ello, hemos realizado un análisis exploratorio de los datos y los siguientes modelos de clasificación: lineal, logístico, LDA y QDA. 
+
+***
+***
+
+[//]: Librerías
+
+```{r Libraries}
+
+library(here) # comment [//]:
+library(AER) # Para la base de datos
+library(skimr) # Summary mejorado
+library(dplyr)
+library(tidyverse)
+library(corrplot) # Gráfico de correlaciones
+library(MASS) # LDA y QDA
+library(klaR) # Gráficos de partición
+library(Deducer) # Curva ROC
+
+```
+
+***
+***
+
+## BASE DE DATOS
+
+```{r load data}
+
+data("CreditCard")
+
+data <- CreditCard
+
+  # Realizamos un attach para trabajar con el dataset
+attach(data)
+
+```
+
+[//]: Visualizamos los datos
+
+```{r view data}
+
+  # Nombres de las columnas
+names(data)
+
+  # Primeras filas
+head(data)
+
+  # Últimas filas
+tail(data)
+
+  # Dimensión de la base de datos
+dim(data)
+
+```
+
+Tenemos un dataset con 1319 filas y 12 variables, estas son:
+
+  - `card`: ¿Se aceptó la solicitud de tarjeta de crédito?
+  - `reports`: Número de informes negativos importantes
+  - `age`: Edad en años y meses
+  - `income`: Renta anual (en 10.000 USD) 
+  - `share`: Relación entre los gastos mensuales de la tarjeta de crédito e ingresos anuales 
+  - `expenditure`: Gasto medio mensual con tarjeta de crédito
+  - `owner`: ¿El individuo es dueño de su casa?
+  - `selfemp`: ¿Es autoempleado?
+  - `dependents`: Número de dependientes
+  - `months`: Meses viviendo en la dirección actual
+  - `majorcards`: Número de tarjetas de crédito retenidas
+  - `active`: Número de cuentas de crédito activas
+  
+***
+***
+
+## ACONDICIONAMIENTO DEL DATASET
+
+[//]: En este apartado preparamos el dataset para su posterior trabajo, de manera que trataremos los NaN, los formatos de las variables...
+
+### Data wrangling
+
+[//]: Comenzaremos con el trato de los NaN, en nuestro caso como no tenemos NaN podemos continuar con nuestro análisis.
+
+```{r data wrangling}
+
+  # Primero observaremos el número de NaN
+sum(is.na(data))
+
+```
+
+[//]: En nuestro carecemos de valores nulos.
+
+***
+***
+
+## ANÁLISIS EXPLORATORIO
+
+A continuación realizaremos un análisis exploratorio de nuestra base de datos, en el que analizaremos los estadísticos principales, correlaciones...
+
+### Resumen de los estadísticos
+
+En este apartado incluiremos un resumen con los estadísticos principales de cada variable:
+
+```{r skim, include = TRUE}
+
+  # Resumen
+skim(data)
+
+```
+
+Tenemos 3 variables binarias, estas son `card`, `owner` y `selfemp`. El resto de variables son numéricas.
+
+Como podemos observar,  el coeficiente de variación de todas las variables es bastante elevado lo que nos indica que existe una alta desviación respecto a su media. 
+
+***
+
+### Histogramas
+
+```{r histogram, include = TRUE}
+
+  # Seleccionamos las variables numéricas
+data_num <- select_if(data, is.numeric)
+
+  # Mediante un loop realizamos los histogramas de cada variable
+par(mfrow = c(3, 3))
+sapply(seq(1, 9), 
+       function(j)
+         hist(data_num[,j], 
+              main = colnames(data_num)[j], 
+              xlab = "",col = "steelblue2")
+)
+
+```
+
+En la imagen superior tenemos los histogramas de las variables numéricas y como podemos observar ninguna sigue una distribución normal, en general, todas tienen colas pesadas, en el caso de la renta, la media se sitúa en torno a 30.000 USD pero hay individuos con rentas superiores a los 100.000 USD.
+
+***
+
+### Diagramas de caja
+
+```{r boxplot, include = TRUE}
+
+  # Mediante un loop realizamos los boxplots de cada variable
+par(mfrow = c(2, 4))
+sapply(seq(1, 9), 
+       function(j)
+         boxplot(data_num[,j], 
+              main = colnames(data_num)[j], 
+              xlab = "",col = "steelblue2")
+)
+
+```
+
+En este caso podemos observar los *boxplots* de las variables numéricas, como hemos comentado anteriormente presentan grandes desviaciones causadas por los *outliers*, podemos observar como la variable `age` tiene muchos *outliers* en la parte superior de la distribución, lo que nos indica una asimetría positiva o sesgada a la derecha.
+
+***
+
+### Correlaciones
+
+A continuación realizaeremos un *heatmap* con las correlaciones.
+
+```{r correlations, include = TRUE}
+
+  # Definimos nuestra matriz de correlaciones
+matriz_corr <- cor(data_num)
+
+  # Con la función corrplot dibujamos las correlaciones, hemos utilizado el método "color" para realizar un heatmap, lo relativo a tl.__ es para modificar el texto.
+corrplot(matriz_corr, type = "lower", order = "original", method = "color", addCoefasPercent = T,
+                   tl.col = "black", tl.cex = 0.7, tl.srt = 45, )
+
+```
+
+Se puede observar que no existe una alta correlación entre las variables de nuestro dataset, salvo la relación entre `share` y `expenditure`, esto se debe a que la variable `share` incluye los gastos mensuales, ya explicados por la variable `expenditure`. 
+
+***
+***
+
+## INGENIERÍA DE VARIABLES
+
+[//]: En este apartado realizaremos las transformaciones de las variables pertinentes para poder trabajar posteriormente.
+
+```{r dummy recode}
+
+  # Factorizamos las respuestas de las columnas "card", "owner" y "selfemp"
+data <- data %>%
+    mutate(card = recode(card, "no" = 0, "yes" = 1),
+           owner = recode(owner, "no" = 0, "yes" = 1),
+           selfemp = recode(selfemp, "no" = 0, "yes" = 1)
+           )
+
+  # Eliminamos la variable "expenditure" ya que es combinación de "share"
+data <- data %>%
+  select_at(vars(-expenditure))
+
+```
+
+Hemos generado unas variables dummy para las columnas categóricas, de tal manera que no tengamos problemas a la hora de calcular los modelos. Además como el gasto mensual (`expenditure`) está explicado en la proporción de gasto con la tarjeta (`share`) hemos eliminado esta variable.
+
+***
+***
+
+## MODELOS DE CLASIFICACIÓN
+
+En este apartado vamos a realizar diversos modelos vistos durante la asignatura *Técnicas de Clasificación*. Comenzaremos con un modelo de regresión lineal, continuaremos con uno de regresión logística, para finalizar LDA y QDA.
+
+### Modelo de Regresión Lineal 
+
+En estadística la regresión lineal o ajuste lineal es un modelo matemático usado para aproximar la relación de dependencia entre una variable dependiente Y, las variables independientes $Xi$ y un término aleatorio $ε$. Este modelo puede ser expresado como:
+
+$$Y_{t} = \beta_{0} + \beta_{1}X_{1} + \beta_{2}X_{2} + ... + \beta_{P}X_{P} + ε$$
+
+donde:
+- $Y_{t}$: variable dependiente o explicada.
+- $X_{n}$: variables explicativas o independientes.
+- $\beta_{n}$: parámetros, miden la influencia que las variables explicativas tienen sobre el regrediendo.
+
+```{r linear model, include = TRUE}
+
+  # Definimos nuestro modelo
+modelo_lineal <- lm(card ~ ., data = data)
+
+  # Observamos el modelo
+summary(modelo_lineal)
+
+```
+
+Como podemos observar las variables más significativas son los reportes negativos, el ingreso anual, la proporción del gasto, ser propietario de la vivienda y el número de tarjetas activas.
+
+#### Matriz de confusión y precisión
+
+A continuación, calcularemos la matriz de confusión del modelo y su precisión.
+
+```{r confussion matrix & precission linear model, include = TRUE}
+
+  # Creamos nuestra matriz de confusión
+fit.pred <- ifelse(modelo_lineal$fitted.values > 0.5, 1, 0)
+mat_conf_lineal <- table(fit.pred, data$card)
+mat_conf_lineal
+
+  # Calculamos la precisión o accuracy del modelo
+precision_lineal <- (mat_conf_lineal[1,1] + mat_conf_lineal[2,2])/sum(mat_conf_lineal)
+precision_lineal
+```
+
+En cuanto a la matriz de confusión, podemos observar que de 107 personas a las que NO deberíamos haberle dado crédito, se lo hemos concedido a 4. Mientras que de un total de 1212 individuos a los que deberíamos haberle concedido el crédito, a 193 se les ha denegado la petición. Por lo tanto, nuestro modelo es muy restrictivo a la hora de conceder el crédito, ya que el coste de conceder un crédito a una persona con posibilidad de insolvencia es muy elevado.
+
+Tras el cálculo de la precisión, obtenemos un resultado del 85.06 %
+
+Mediante el método AIC vamos a seleccionar el mejor modelo y volver a calcular para ver si obtenemos una mejor precisión:
+
+```{r stepAIC linear model}
+
+stepAIC(modelo_lineal)
+
+```
+
+Por lo tanto, el mejor modelo sería: 
+
+`lm(formula = card ~ reports + income + share + owner + selfemp + dependents + majorcards + active, data = data)`
+
+```{r confussion matrix & precission linear model_AIC, include = TRUE}
+
+   # Definimos nuestro modelo
+modelo_lineal_AIC <- lm(formula = card ~ reports + income + share + owner + selfemp + dependents + majorcards + active, 
+                        data = data)
+
+  # Creamos nuestra matriz de confusión
+fit.pred <- ifelse(modelo_lineal_AIC$fitted.values > 0.5, 1, 0)
+mat_conf_lineal_AIC <- table(fit.pred, data$card)
+mat_conf_lineal_AIC
+
+  # Calculamos la precisión o accuracy del modelo
+precision_lineal_AIC <- (mat_conf_lineal_AIC[1,1] + mat_conf_lineal_AIC[2,2])/sum(mat_conf_lineal_AIC)
+precision_lineal_AIC
+
+```
+
+Como podemos hemos mejorado ligeramente la preicisión del modelo, pasando del 85.06 % a 85.29 %
+
+
+***
+
+### Modelo de Regresión Logística
+
+En estadística, la regresión logística es un tipo de análisis de regresión utilizado para predecir el resultado de una variable categórica (una variable que puede adoptar un número limitado de categorías) en función de las variables independientes o predictoras. Es útil para modelar la probabilidad de un evento ocurriendo como función de otros factores. El análisis de regresión logística se enmarca en el conjunto de Modelos Lineales Generalizados (GLM por sus siglas en inglés) que usa como función de enlace la función logit. Las probabilidades que describen el posible resultado de un único ensayo se modelan, como una función de variables explicativas, utilizando una función logística.
+
+
+$$Y_{i} = B(p_{i}, n_{i}), i = 1, ..., m$$ 
+
+donde los números de ensayos Bernoulli $n_{i}$ son conocidos y las probabilidades de éxito $p_{i}$ son desconocidas.
+
+#### Cálculo del modelo
+
+```{r logit model, include = TRUE}
+
+  # Definimos nuestro modelo
+modelo_logistico <- glm(card ~ ., data = data, family = binomial(link = logit))
+
+  # Observamos el modelo
+summary(modelo_logistico)
+
+```
+
+El modelo logístico toma como variables más representativas la relación del gasto respecto al ingreso anual.
+
+#### Matriz de confusión y precisión
+
+A continuación, calcularemos la matriz de confusión del modelo y su precisión.
+
+```{r confussion matrix & precission logit model, include = TRUE}
+
+  # Creamos nuestra matriz de confusión
+fit.pred <- ifelse(modelo_logistico$fitted.values > 0.5, 1, 0)
+mat_conf_logistico <- table(fit.pred, data$card)
+mat_conf_logistico
+
+  # Calculamos la precisión o accuracy del modelo
+precision_logistico <- (mat_conf_logistico[1,1] + mat_conf_logistico[2,2])/sum(mat_conf_logistico)
+precision_logistico
+
+```
+
+En cuanto a la matriz de confusión, podemos observar que de 317 personas a las que NO deberíamos haberle dado crédito, se lo hemos concedido a 23. Mientras que de un total de 1002 individuos a los que deberíamos haberle concedido el crédito, a 2 se les ha denegado la petición. Por lo tanto, nuestro modelo ya no es tan restrictivo a la hora de conceder el crédito, porque solo denagamos el 0.02 % de los créditos a las personas que si deberíamos concederselo.
+
+Tras el cálculo de la precisión, obtenemos un resultado del 98.1 %
+
+```{r rocplot, include = TRUE}
+
+  # Generamos la curva roc
+rocplot(modelo_logistico)
+
+```
+
+Recordemos que cuánto más se aleje de la linea a 45º mejor modelo tendremos. En nuestro se trata de un modelo muy preciso.
+
+***
+***
+
+### Análisis Discriminante Lineal (LDA)
+
+El Análisis Discriminante Lineal o *Linear Discrimiant Analysis* (LDA) es un método de clasificación supervisado de variables cualitativas en el que dos o más grupos son conocidos a priori y nuevas observaciones se clasifican en uno de ellos en función de sus características. Haciendo uso del teorema de Bayes, LDA estima la probabilidad de que una observación, dado un determinado valor de los predictores, pertenezca a cada una de las clases de la variable cualitativa, $P(Y = k | X = x)$. Finalmente se asigna la observación a la clase k para la que la probabilidad predicha es mayor.
+
+#### Cálculo del modelo
+
+```{r LDA, include = TRUE}
+
+  # Definimos nuestro modelo
+modelo_LDA <- lda(card ~ . -expenditure, data = data)
+modelo_LDA
+
+```
+
+La probabilidad a priori de no conceder el crédito es del 22.44 %, mientras que la probailidad de concederlo es 77.55 %.
+
+```{r confussion matrix & precission LDA, include = TRUE}
+
+  # Calculamos la predicción de respuesta
+LDA_result <- predict(modelo_LDA, newdata = data) 
+
+  # Matriz de confusion
+mat_conf_LDA <- table(LDA_result$class, data$card) 
+mat_conf_LDA
+
+  # Precision
+precision_LDA <- sum(diag(mat_conf_LDA))/sum(mat_conf_LDA)
+precision_LDA
+
+```
+
+En este caso, en la matriz de confusión podemos observar que de 120 personas a las que NO deberíamos haberle dado crédito, se lo hemos concedido a 6. Mientras que de un total de 1219 individuos a los que deberíamos haberle concedido el crédito, a 182 se les ha denegado la petición. Por lo tanto, nuestro modelo vuelve a ser muy restrictivo a la hora de conceder el crédito..
+
+Tras el cálculo de la precisión, obtenemos un resultado del 85.74 %
+
+```{r partiton plots LDA, include = TRUE}
+
+  # Mediante un loop realizamos los gráficos de partición de reports con cada variable
+sapply(seq(3, 11), 
+       function(j)
+partimat(data[, c(2, j)], card, data = data, method = "lda", main = "Gráficos de partición"))
+
+```
+
+***
+***
+
+### Análisis Discriminante Cuadrático (QDA)
+
+El clasificador cuadrático o *Quadratic Discriminat Analysis* QDA se asemeja en gran medida al LDA, con la única diferencia de que el QDA considera que cada clase k tiene su propia matriz de covarianza ($\sum k$) y, como consecuencia, la función discriminante toma forma cuadrática.
+
+#### Cálculo del modelo
+
+```{r QDA, include = TRUE}
+
+  # Definimos nuestro modelo
+modelo_QDA <- qda(card ~ . - expenditure, data = data)
+modelo_QDA
+
+```
+
+La probabilidad a priori de no conceder el crédito es del 22.44 %, mientras que la probailidad de concederlo es 77.55 %.
+
+```{r confussion matrix & precission QDA, include = TRUE}
+
+  # Calculamos la predicción de respuesta
+QDA_result <- predict(modelo_QDA, newdata = data) 
+
+  # Matriz de confusion
+mat_conf_QDA <- table(QDA_result$class, data$card) 
+mat_conf_QDA
+
+  # Precision
+precision_QDA <- sum(diag(mat_conf_QDA))/sum(mat_conf_QDA)
+precision_QDA
+
+```
+
+En este caso, en la matriz de confusión podemos observar que de 318 personas a las que NO deberíamos haberle dado crédito, se lo hemos concedido a 23. Mientras que de un total de 1001 individuos a los que deberíamos haberle concedido el crédito, a tan solo 1 se le ha denegado la petición. Por lo tanto, no es restrictivo a la hora de conceder el préstamo lo que hace que tengamos mayor precisión.
+
+Tras el cálculo de la precisión, obtenemos un resultado del 98.18 %
+
+```{r partiton plots QDA, include = TRUE}
+
+  # Mediante un loop realizamos los gráficos de partición de reports con cada variable
+sapply(seq(3, 11), 
+       function(j)
+partimat(data[, c(2, j)], card, data = data, method = "qda", main = "Gráficos de partición"))
+
+```
+
+***
+***
+
+## CONCLUISONES:
+
+```{r conclusion, include = TRUE}
+
+as.data.frame(x = cbind(precision_lineal, precision_lineal_AIC, precision_logistico, precision_LDA, precision_QDA))
+
+```
+
+Por lo tanto, elegimos el modelo QDA puesto que tiene mayor precisión más del 98%. Sin embargo, conociendo el negocio y el coste asociado a conceder una tarjeta de crédito a un individuo incapaz de responder a las deudas contraidas no seleccionaríamos un modelo que conceda préstamos a personas que van a impagar, como es el caso del QDA. Si somos un banco adverso al riesgo y no nos interesa casi ningún cliente moroso, sacrificando a posibles clientes por tener un modelo más restrectivo, seleccionaríamos el modelo lineal AIC. Sin embargo, si no tenemos tanta adversión al riesgo y no queremos perder clientes seleccionaríamos el LDA, que manteniendo un comportamiento de clasificación conservador no es tan restrectivo el modelo lineal AIC.
+
+***
+***
+
+## REFERNCIAS
+
+Fellows, I. (2015, diciembre). Package ‘Deducer’. Recuperado de https://cran.r-project.org/web/packages/Deducer/Deducer.pdf
+
+Generalized linear model. (s. f.). En Wikipedia. Recuperado 15 de noviembre de 2020, de https://en.wikipedia.org/wiki/Generalized_linear_model
+
+Kleiber, C., & Zeileis, A. (2020, junio). Package ‘AER’. Recuperado de https://cran.r-project.org/web/packages/AER/AER.pdf
+
+Ligges, U. (2020, febrero). Package ‘klaR’. Recuperado de https://cran.r-project.org/web/packages/klaR/klaR.pdf
+
+Linear discriminant analysis. (s. f.). En Wikipedia. Recuperado 15 de noviembre de 2020, de https://en.wikipedia.org/wiki/Linear_discriminant_analysis
+
+Logistic regression. (s. f.). En Wikipedia. Recuperado 15 de noviembre de 2020, de https://en.wikipedia.org/wiki/Logistic_regression
+
+Quadratic classifier. (s. f.). En Wikipedia. Recuperado 15 de noviembre de 2020, de https://en.wikipedia.org/wiki/Quadratic_classifier#Quadratic_discriminant_analysis
+
+Ripley, B. (2020, septiembre). Package ‘MASS’. Recuperado de https://cran.r-project.org/web/packages/MASS/MASS.pdf
+
